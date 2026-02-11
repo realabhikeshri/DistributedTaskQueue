@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using DistributedTaskQueue.Core.Interfaces;
-using DistributedTaskQueue.Core.Models;
 
 namespace DistributedTaskQueue.Worker.Services;
 
@@ -28,21 +27,32 @@ public sealed class VisibilityTimeoutMonitor : BackgroundService
         CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "VisibilityTimeoutMonitor started");
+            "VisibilityTimeoutMonitor started with scan interval {IntervalSeconds}s",
+            ScanInterval.TotalSeconds);
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
                 var expiredTasks =
                     await _taskQueue.GetExpiredProcessingTasksAsync(
                         DateTime.UtcNow,
                         stoppingToken);
 
-                foreach (var task in expiredTasks)
+                if (expiredTasks.Count > 0)
                 {
                     _logger.LogWarning(
-                        "Visibility timeout expired for task {TaskId}",
+                        "Found {ExpiredCount} expired processing tasks",
+                        expiredTasks.Count);
+                }
+
+                foreach (var task in expiredTasks)
+                {
+                    if (task?.Metadata?.TaskId is null)
+                        continue;
+
+                    _logger.LogWarning(
+                        "Re-queuing expired task {TaskId}",
                         task.Metadata.TaskId);
 
                     await _taskQueue.FailAsync(
@@ -51,24 +61,26 @@ public sealed class VisibilityTimeoutMonitor : BackgroundService
                             "Visibility timeout expired"),
                         stoppingToken);
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "VisibilityTimeoutMonitor encountered an error");
-            }
 
-            await Task.Delay(
-                ScanInterval,
-                stoppingToken);
+                await Task.Delay(
+                    ScanInterval,
+                    stoppingToken);
+            }
         }
-
-        _logger.LogInformation(
-            "VisibilityTimeoutMonitor stopped");
+        catch (OperationCanceledException)
+        {
+            // Expected during shutdown
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(
+                ex,
+                "VisibilityTimeoutMonitor crashed unexpectedly");
+        }
+        finally
+        {
+            _logger.LogInformation(
+                "VisibilityTimeoutMonitor stopped");
+        }
     }
 }

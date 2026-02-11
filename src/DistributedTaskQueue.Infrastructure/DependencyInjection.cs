@@ -1,4 +1,6 @@
 ﻿using DistributedTaskQueue.Core.Interfaces;
+using DistributedTaskQueue.Core.Observability;
+using DistributedTaskQueue.Infrastructure.Observability;
 using DistributedTaskQueue.Infrastructure.Redis;
 using DistributedTaskQueue.Infrastructure.Serialization;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,7 +15,7 @@ public static class DependencyInjection
     {
         services.AddSingleton<IRedisConnectionFactory>(
             _ => new RedisConnectionFactory(redisConnectionString));
-
+        services.AddSingleton<ITaskMetrics, LoggingTaskMetrics>();
         services.AddSingleton<IDistributedLock, RedisDistributedLock>();
         services.AddSingleton<ITaskQueue, RedisTaskQueue>();
         services.AddSingleton<ITaskSerializer, JsonTaskSerializer>();

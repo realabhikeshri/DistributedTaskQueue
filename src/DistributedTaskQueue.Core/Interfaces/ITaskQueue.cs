@@ -32,5 +32,9 @@ public interface ITaskQueue
     Task<IReadOnlyList<TaskMessage>> GetExpiredProcessingTasksAsync(
     DateTime utcNow,
     CancellationToken ct);
+    Task<int> PromoteDueRetriesAsync(
+    DateTime utcNow,
+    CancellationToken ct = default);
+
 
 }

@@ -25,6 +25,9 @@ var host = Host.CreateDefaultBuilder(args)
 
         // ⏱ Visibility timeout reaper
         services.AddHostedService<VisibilityTimeoutMonitor>();
+        
+        services.AddHostedService<RetryProcessor>();
+
     })
     .ConfigureLogging(logging =>
     {
