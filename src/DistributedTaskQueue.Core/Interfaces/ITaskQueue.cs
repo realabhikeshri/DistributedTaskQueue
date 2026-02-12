@@ -36,5 +36,9 @@ public interface ITaskQueue
     DateTime utcNow,
     CancellationToken ct = default);
 
+    Task<bool> TryAcquireLockAsync(
+    string lockKey,
+    TimeSpan expiry,
+    CancellationToken cancellationToken);
 
 }

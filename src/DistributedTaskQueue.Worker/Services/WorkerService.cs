@@ -6,7 +6,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
-using System.Threading;
 
 namespace DistributedTaskQueue.Worker.Services;
 
@@ -61,26 +60,26 @@ public sealed class WorkerService : BackgroundService
     }
 
     protected override async Task ExecuteAsync(
-        CancellationToken stoppingToken)
+    CancellationToken stoppingToken)
     {
-        var runningTasks = new List<Task>();
-
         while (!stoppingToken.IsCancellationRequested)
         {
             await _semaphore.WaitAsync(stoppingToken);
 
-            var task = ProcessNextAsync(stoppingToken);
-
-            runningTasks.Add(task);
-
-            _ = task.ContinueWith(_ =>
+            _ = Task.Run(async () =>
             {
-                _semaphore.Release();
-            }, TaskScheduler.Default);
+                try
+                {
+                    await ProcessNextAsync(stoppingToken);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
+            }, stoppingToken);
         }
-
-        await Task.WhenAll(runningTasks);
     }
+
 
     private async Task ProcessNextAsync(
         CancellationToken stoppingToken)
@@ -94,6 +93,7 @@ public sealed class WorkerService : BackgroundService
                 _visibilityTimeout,
                 stoppingToken);
 
+            // No task available → normal case
             if (task is null)
             {
                 await Task.Delay(
@@ -144,19 +144,31 @@ public sealed class WorkerService : BackgroundService
                 task,
                 stoppingToken);
         }
+        catch (OperationCanceledException)
+        {
+            // Graceful shutdown – ignore
+        }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _metrics.TaskFailed();
 
+            // Only record failure if a real task was being processed
             if (task is not null)
             {
+                _metrics.TaskFailed();
+
                 _circuitBreaker.RecordFailure(task.Metadata.TaskType);
 
                 await _taskQueue.FailAsync(
                     task,
                     ex,
                     stoppingToken);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Worker loop exception without task: {Message}",
+                    ex.Message);
             }
         }
     }

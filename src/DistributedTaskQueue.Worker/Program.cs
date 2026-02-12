@@ -1,39 +1,62 @@
-﻿using DistributedTaskQueue.Core.Observability;
-using DistributedTaskQueue.Infrastructure;
-using DistributedTaskQueue.Infrastructure.Observability;
+﻿using DistributedTaskQueue.Infrastructure;
 using DistributedTaskQueue.Worker.Handlers;
+using DistributedTaskQueue.Worker.Health;
 using DistributedTaskQueue.Worker.Services;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Formatting.Compact;
 
-var host = Host.CreateDefaultBuilder(args)
-    .ConfigureServices(services =>
-    {
-        // 🔌 Redis + Infrastructure
-        services.AddInfrastructure("redis:6379");
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console(new CompactJsonFormatter())
+    .CreateLogger();
 
-        // 📊 Observability
-        services.AddSingleton<ITaskMetrics, LoggingTaskMetrics>();
+try
+{
+    Log.Information("Starting DistributedTaskQueue Worker");
 
-        // 🧠 Task execution
-        services.AddSingleton<ITaskHandler, EmailTaskHandler>();
-        services.AddSingleton<TaskExecutor>();
+    var builder = Host.CreateDefaultBuilder(args)
+        .UseSerilog()
+        .ConfigureServices((context, services) =>
+        {
+            services.AddInfrastructure("localhost:6379,abortConnect=false");
 
-        // 👷 Workers
-        services.AddHostedService<WorkerService>();
+            services.AddSingleton<ITaskHandler, EmailTaskHandler>();
+            services.AddSingleton<TaskExecutor>();
 
-        // ⏱ Visibility timeout reaper
-        services.AddHostedService<VisibilityTimeoutMonitor>();
-        
-        services.AddHostedService<RetryProcessor>();
+            services.AddHostedService<WorkerService>();
+            services.AddHostedService<VisibilityTimeoutMonitor>();
+            services.AddHostedService<RetryProcessor>();
 
-    })
-    .ConfigureLogging(logging =>
-    {
-        logging.ClearProviders();
-        logging.AddConsole();
-    })
-    .Build();
+            // ✅ Health Checks
+            services.AddHealthChecks()
+                .AddCheck<RedisHealthCheck>("redis");
+        })
+        .ConfigureWebHostDefaults(webBuilder =>
+        {
+            webBuilder.Configure(app =>
+            {
+                app.UseRouting();
 
-await host.RunAsync();
+                app.UseEndpoints(endpoints =>
+                {
+                    endpoints.MapHealthChecks("/health");
+                });
+            });
+        });
+
+    var host = builder.Build();
+
+    await host.RunAsync();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Worker terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
+}

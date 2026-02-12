@@ -343,4 +343,19 @@ return tasks
         return promotedTasks.Length;
     }
 
+    public async Task<bool> TryAcquireLockAsync(
+    string lockKey,
+    TimeSpan expiry,
+    CancellationToken cancellationToken)
+    {
+        var db = await _connectionFactory.GetDatabaseAsync();
+
+        return await db.StringSetAsync(
+            lockKey,
+            Environment.MachineName,
+            expiry,
+            When.NotExists);
+    }
+
+
 }

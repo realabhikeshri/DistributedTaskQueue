@@ -30,10 +30,26 @@ public sealed class VisibilityTimeoutMonitor : BackgroundService
             "VisibilityTimeoutMonitor started with scan interval {IntervalSeconds}s",
             ScanInterval.TotalSeconds);
 
+        const string LockKey = "visibility:monitor:lock";
+        var lockExpiry = TimeSpan.FromSeconds(10);
+
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
+                // 🔐 Try acquiring distributed lock
+                var lockAcquired = await _taskQueue.TryAcquireLockAsync(
+                    LockKey,
+                    lockExpiry,
+                    stoppingToken);
+
+                if (!lockAcquired)
+                {
+                    // Another worker owns the lock
+                    await Task.Delay(ScanInterval, stoppingToken);
+                    continue;
+                }
+
                 var expiredTasks =
                     await _taskQueue.GetExpiredProcessingTasksAsync(
                         DateTime.UtcNow,
@@ -83,4 +99,5 @@ public sealed class VisibilityTimeoutMonitor : BackgroundService
                 "VisibilityTimeoutMonitor stopped");
         }
     }
+
 }
