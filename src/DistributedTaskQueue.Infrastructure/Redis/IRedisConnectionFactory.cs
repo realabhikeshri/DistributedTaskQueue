@@ -9,4 +9,6 @@ namespace DistributedTaskQueue.Infrastructure.Redis;
 public interface IRedisConnectionFactory
 {
     Task<IDatabase> GetDatabaseAsync();
+    IConnectionMultiplexer GetConnection();
+
 }

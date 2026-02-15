@@ -24,80 +24,63 @@ public sealed class VisibilityTimeoutMonitor : BackgroundService
     }
 
     protected override async Task ExecuteAsync(
-        CancellationToken stoppingToken)
+    CancellationToken stoppingToken)
     {
-        _logger.LogInformation(
-            "VisibilityTimeoutMonitor started with scan interval {IntervalSeconds}s",
-            ScanInterval.TotalSeconds);
-
         const string LockKey = "visibility:monitor:lock";
         var lockExpiry = TimeSpan.FromSeconds(10);
 
-        try
+        _logger.LogInformation(
+            "VisibilityTimeoutMonitor started.");
+
+        while (!stoppingToken.IsCancellationRequested)
         {
-            while (!stoppingToken.IsCancellationRequested)
+            try
             {
-                // 🔐 Try acquiring distributed lock
-                var lockAcquired = await _taskQueue.TryAcquireLockAsync(
-                    LockKey,
-                    lockExpiry,
-                    stoppingToken);
+                var lockAcquired =
+                    await _taskQueue.TryAcquireLockAsync(
+                        LockKey,
+                        lockExpiry,
+                        stoppingToken);
 
                 if (!lockAcquired)
                 {
-                    // Another worker owns the lock
-                    await Task.Delay(ScanInterval, stoppingToken);
+                    await Task.Delay(
+                        ScanInterval,
+                        stoppingToken);
                     continue;
                 }
 
-                var expiredTasks =
-                    await _taskQueue.GetExpiredProcessingTasksAsync(
+                var recoveredCount =
+                    await _taskQueue.RequeueExpiredTasksAsync(
                         DateTime.UtcNow,
                         stoppingToken);
 
-                if (expiredTasks.Count > 0)
+                if (recoveredCount > 0)
                 {
                     _logger.LogWarning(
-                        "Found {ExpiredCount} expired processing tasks",
-                        expiredTasks.Count);
+                        "Recovered {Count} expired tasks.",
+                        recoveredCount);
                 }
-
-                foreach (var task in expiredTasks)
-                {
-                    if (task?.Metadata?.TaskId is null)
-                        continue;
-
-                    _logger.LogWarning(
-                        "Re-queuing expired task {TaskId}",
-                        task.Metadata.TaskId);
-
-                    await _taskQueue.FailAsync(
-                        task,
-                        new TimeoutException(
-                            "Visibility timeout expired"),
-                        stoppingToken);
-                }
-
-                await Task.Delay(
-                    ScanInterval,
-                    stoppingToken);
             }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogCritical(
+                    ex,
+                    "VisibilityTimeoutMonitor crashed unexpectedly.");
+            }
+
+            await Task.Delay(
+                ScanInterval,
+                stoppingToken);
         }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown
-        }
-        catch (Exception ex)
-        {
-            _logger.LogCritical(
-                ex,
-                "VisibilityTimeoutMonitor crashed unexpectedly");
-        }
-        finally
-        {
-            _logger.LogInformation(
-                "VisibilityTimeoutMonitor stopped");
-        }
+
+        _logger.LogInformation(
+            "VisibilityTimeoutMonitor stopped.");
     }
+
 
 }

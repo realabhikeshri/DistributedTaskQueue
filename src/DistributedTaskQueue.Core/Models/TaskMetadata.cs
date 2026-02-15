@@ -20,6 +20,8 @@ public sealed class TaskMetadata
     public DateTime? LastFailedAtUtc { get; set; }
 
     public string? ProcessingPayload { get; set; }
+    public TaskPriority Priority { get; set; } = TaskPriority.Medium;
+    public string QueueKey { get; set; } = default!;
 
     public TaskMetadata()
     {

@@ -2,7 +2,8 @@
 
 namespace DistributedTaskQueue.Infrastructure.Redis;
 
-public sealed class RedisConnectionFactory : IRedisConnectionFactory, IDisposable
+public sealed class RedisConnectionFactory
+    : IRedisConnectionFactory, IDisposable
 {
     private readonly Lazy<Task<ConnectionMultiplexer>> _connection;
     private bool _disposed;
@@ -15,23 +16,44 @@ public sealed class RedisConnectionFactory : IRedisConnectionFactory, IDisposabl
 
     public async Task<IDatabase> GetDatabaseAsync()
     {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(RedisConnectionFactory));
+        ThrowIfDisposed();
 
-        var connection = await _connection.Value;
+        var connection = await _connection.Value
+            .ConfigureAwait(false);
+
         return connection.GetDatabase();
+    }
+
+    public IConnectionMultiplexer GetConnection()
+    {
+        ThrowIfDisposed();
+
+        // Safe here because script loading happens
+        // after DI container is fully built.
+        return _connection.Value
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(
+                nameof(RedisConnectionFactory));
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
 
         if (_connection.IsValueCreated)
         {
-            _connection.Value
+            var connection = _connection.Value
                 .GetAwaiter()
-                .GetResult()
-                .Dispose();
+                .GetResult();
+
+            connection.Dispose();
         }
 
         _disposed = true;

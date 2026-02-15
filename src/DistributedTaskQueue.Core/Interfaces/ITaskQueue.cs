@@ -41,4 +41,9 @@ public interface ITaskQueue
     TimeSpan expiry,
     CancellationToken cancellationToken);
 
+    Task<int> RequeueExpiredTasksAsync(
+    DateTime utcNow,
+    CancellationToken cancellationToken);
+
+
 }

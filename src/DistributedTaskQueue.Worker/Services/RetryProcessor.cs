@@ -12,6 +12,12 @@ public sealed class RetryProcessor : BackgroundService
     private static readonly TimeSpan ScanInterval =
         TimeSpan.FromSeconds(5);
 
+    private static readonly TimeSpan LockExpiry =
+        TimeSpan.FromSeconds(10);
+
+    private const string RetryLockKey =
+        "retry:promotion:lock";
+
     private readonly ITaskQueue _taskQueue;
     private readonly ILogger<RetryProcessor> _logger;
 
@@ -26,23 +32,31 @@ public sealed class RetryProcessor : BackgroundService
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
     {
-        _logger.LogInformation(
-            "RetryProcessor started");
+        _logger.LogInformation("RetryProcessor started");
 
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                var promotedCount =
-                    await _taskQueue.PromoteDueRetriesAsync(
-                        DateTime.UtcNow,
+                var lockAcquired =
+                    await _taskQueue.TryAcquireLockAsync(
+                        RetryLockKey,
+                        LockExpiry,
                         stoppingToken);
 
-                if (promotedCount > 0)
+                if (lockAcquired)
                 {
-                    _logger.LogInformation(
-                        "Promoted {Count} retry tasks back to main queue",
-                        promotedCount);
+                    var promotedCount =
+                        await _taskQueue.PromoteDueRetriesAsync(
+                            DateTime.UtcNow,
+                            stoppingToken);
+
+                    if (promotedCount > 0)
+                    {
+                        _logger.LogInformation(
+                            "Promoted {Count} retry tasks back to main queue",
+                            promotedCount);
+                    }
                 }
 
                 await Task.Delay(
@@ -62,8 +76,7 @@ public sealed class RetryProcessor : BackgroundService
         }
         finally
         {
-            _logger.LogInformation(
-                "RetryProcessor stopped");
+            _logger.LogInformation("RetryProcessor stopped");
         }
     }
 }

@@ -13,6 +13,7 @@ public static class DependencyInjection
         this IServiceCollection services,
         string redisConnectionString)
     {
+        services.AddSingleton<IRateLimiter, RedisRateLimiter>();
         services.AddSingleton<IRedisConnectionFactory>(
             _ => new RedisConnectionFactory(redisConnectionString));
         services.AddSingleton<ITaskMetrics, LoggingTaskMetrics>();

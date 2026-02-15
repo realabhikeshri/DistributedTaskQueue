@@ -1,4 +1,6 @@
-﻿using DistributedTaskQueue.Infrastructure;
+﻿using DistributedTaskQueue.Core.Interfaces;
+using DistributedTaskQueue.Core.Options;
+using DistributedTaskQueue.Infrastructure;
 using DistributedTaskQueue.Worker.Handlers;
 using DistributedTaskQueue.Worker.Health;
 using DistributedTaskQueue.Worker.Services;
@@ -6,6 +8,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Prometheus;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -22,16 +25,21 @@ try
         .UseSerilog()
         .ConfigureServices((context, services) =>
         {
-            services.AddInfrastructure("localhost:6379,abortConnect=false");
+            services.AddSingleton(new QueueOptions
+            {
+                MaxRetryAttempts = 5
+            });
+
+            services.AddInfrastructure(
+                "localhost:6379,abortConnect=false");
 
             services.AddSingleton<ITaskHandler, EmailTaskHandler>();
             services.AddSingleton<TaskExecutor>();
 
             services.AddHostedService<WorkerService>();
             services.AddHostedService<VisibilityTimeoutMonitor>();
-            services.AddHostedService<RetryProcessor>();
+            services.AddHostedService<RetryScheduler>();
 
-            // ✅ Health Checks
             services.AddHealthChecks()
                 .AddCheck<RedisHealthCheck>("redis");
         })
@@ -41,9 +49,15 @@ try
             {
                 app.UseRouting();
 
+                // 🔥 Prometheus HTTP metrics
+                app.UseHttpMetrics();
+
                 app.UseEndpoints(endpoints =>
                 {
                     endpoints.MapHealthChecks("/health");
+
+                    // 🔥 Expose metrics
+                    endpoints.MapMetrics();
                 });
             });
         });

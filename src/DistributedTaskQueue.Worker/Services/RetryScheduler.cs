@@ -3,57 +3,67 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using StackExchange.Redis;
-using DistributedTaskQueue.Infrastructure.Redis;
+using DistributedTaskQueue.Core.Interfaces;
 
 namespace DistributedTaskQueue.Worker.Services
 {
     public sealed class RetryScheduler : BackgroundService
     {
-        private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan ScanInterval =
+            TimeSpan.FromSeconds(5);
 
-        private readonly IRedisConnectionFactory _redisConnectionFactory;
+        private readonly ITaskQueue _taskQueue;
         private readonly ILogger<RetryScheduler> _logger;
 
         public RetryScheduler(
-            IRedisConnectionFactory redisConnectionFactory,
+            ITaskQueue taskQueue,
             ILogger<RetryScheduler> logger)
         {
-            _redisConnectionFactory = redisConnectionFactory;
+            _taskQueue = taskQueue;
             _logger = logger;
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override async Task ExecuteAsync(
+    CancellationToken stoppingToken)
         {
-            IDatabase db = await _redisConnectionFactory.GetDatabaseAsync();
+            const string lockKey = "dtq:retry:leader";
+            var lockExpiry = TimeSpan.FromSeconds(10);
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    long nowTicks = DateTime.UtcNow.Ticks;
+                    var acquired =
+                        await _taskQueue.TryAcquireLockAsync(
+                            lockKey,
+                            lockExpiry,
+                            stoppingToken);
 
-                    var readyTasks = await db.SortedSetRangeByScoreAsync(
-                        RedisKeys.RetryZSet,
-                        double.NegativeInfinity,
-                        nowTicks);
-
-                    foreach (var payload in readyTasks)
+                    if (acquired)
                     {
-                        await db.ListLeftPushAsync(RedisKeys.MainQueue, payload);
-                        await db.SortedSetRemoveAsync(RedisKeys.RetryZSet, payload);
+                        var promotedCount =
+                            await _taskQueue.PromoteDueRetriesAsync(
+                                DateTime.UtcNow,
+                                stoppingToken);
 
-                        _logger.LogInformation(
-                            "Retry task moved back to main queue.");
+                        if (promotedCount > 0)
+                        {
+                            _logger.LogInformation(
+                                "Retry leader promoted {Count} tasks.",
+                                promotedCount);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "RetryScheduler encountered an error.");
+                    _logger.LogError(
+                        ex,
+                        "RetryScheduler encountered an error.");
                 }
 
                 await Task.Delay(ScanInterval, stoppingToken);
             }
         }
+
     }
 }
