@@ -1,0 +1,32 @@
+{
+  "title": "Distributed Task Queue",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Tasks Processed",
+      "targets": [
+        {
+          "expr": "dtq_tasks_processed_total"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Tasks Failed",
+      "targets": [
+        {
+          "expr": "dtq_tasks_failed_total"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Active Processing",
+      "targets": [
+        {
+          "expr": "dtq_active_processing"
+        }
+      ]
+    }
+  ]
+}

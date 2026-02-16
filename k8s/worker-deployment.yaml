@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dtq-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dtq-worker
+  template:
+    metadata:
+      labels:
+        app: dtq-worker
+    spec:
+      containers:
+      - name: worker
+        image: yourdockerhub/dtq-worker:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: REDIS_CONNECTION
+          value: redis:6379

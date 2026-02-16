@@ -21,6 +21,7 @@ public sealed class WorkerService : BackgroundService
     private readonly TaskCircuitBreaker _circuitBreaker;
     private readonly ILogger<WorkerService> _logger;
     private readonly IRateLimiter _rateLimiter;
+    private volatile bool _draining;
 
     private readonly SemaphoreSlim _semaphore;
 
@@ -95,17 +96,23 @@ public sealed class WorkerService : BackgroundService
     private async Task WorkerLoopAsync(
         CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested && !_draining)
         {
             await ProcessNextAsync(stoppingToken);
         }
     }
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Worker entering drain mode...");
+        _draining = true;
+        await base.StopAsync(cancellationToken);
+    }
 
-    private async Task ProcessNextAsync(
-        CancellationToken stoppingToken)
+    private async Task ProcessNextAsync(CancellationToken stoppingToken)
     {
         TaskMessage? task = null;
         var stopwatch = new Stopwatch();
+        var activeProcessingIncremented = false;
 
         try
         {
@@ -116,7 +123,6 @@ public sealed class WorkerService : BackgroundService
             if (task is null)
             {
                 _emptyPollCount++;
-
                 var delay = TimeSpan.FromMilliseconds(
                     Math.Min(2000, 200 * _emptyPollCount));
 
@@ -126,11 +132,11 @@ public sealed class WorkerService : BackgroundService
 
             _emptyPollCount = 0;
 
-            // 🔥 ACTIVE PROCESSING GAUGE
             QueueMetrics.ActiveProcessing.Inc();
+            activeProcessingIncremented = true;
 
-            if (!_circuitBreaker.CanExecute(
-                task.Metadata.TaskType))
+            // Circuit breaker
+            if (!_circuitBreaker.CanExecute(task.Metadata.TaskType))
             {
                 await _taskQueue.FailAsync(
                     task,
@@ -138,10 +144,10 @@ public sealed class WorkerService : BackgroundService
                     stoppingToken);
 
                 QueueMetrics.TasksFailed.Inc();
-                QueueMetrics.ActiveProcessing.Dec();
                 return;
             }
 
+            // Rate limiter
             var allowed = await _rateLimiter.AllowAsync(
                 task.Metadata.TaskType,
                 50,
@@ -155,7 +161,6 @@ public sealed class WorkerService : BackgroundService
                     stoppingToken);
 
                 QueueMetrics.TasksFailed.Inc();
-                QueueMetrics.ActiveProcessing.Dec();
                 return;
             }
 
@@ -169,8 +174,6 @@ public sealed class WorkerService : BackgroundService
                 await _taskQueue.AcknowledgeAsync(
                     task,
                     stoppingToken);
-
-                QueueMetrics.ActiveProcessing.Dec();
                 return;
             }
 
@@ -185,8 +188,7 @@ public sealed class WorkerService : BackgroundService
             _metrics.TaskExecuted(stopwatch.Elapsed);
             QueueMetrics.TasksProcessed.Inc();
 
-            _circuitBreaker.RecordSuccess(
-                task.Metadata.TaskType);
+            _circuitBreaker.RecordSuccess(task.Metadata.TaskType);
 
             await _taskQueue.MarkCompletedAsync(
                 task,
@@ -195,11 +197,10 @@ public sealed class WorkerService : BackgroundService
             await _taskQueue.AcknowledgeAsync(
                 task,
                 stoppingToken);
-
-            QueueMetrics.ActiveProcessing.Dec();
         }
         catch (OperationCanceledException)
         {
+            // graceful shutdown
         }
         catch (Exception ex)
         {
@@ -209,6 +210,7 @@ public sealed class WorkerService : BackgroundService
             {
                 _metrics.TaskFailed();
                 QueueMetrics.TasksFailed.Inc();
+                QueueMetrics.TasksRetried.Inc();
 
                 _circuitBreaker.RecordFailure(
                     task.Metadata.TaskType);
@@ -217,16 +219,18 @@ public sealed class WorkerService : BackgroundService
                     task,
                     ex,
                     stoppingToken);
-
-                QueueMetrics.TasksRetried.Inc();
-                QueueMetrics.ActiveProcessing.Dec();
             }
             else
             {
-                _logger.LogDebug(
-                    "Worker loop exception without task: {Message}",
-                    ex.Message);
+                _logger.LogError(ex,
+                    "Worker loop failure before task acquisition");
             }
         }
+        finally
+        {
+            if (activeProcessingIncremented)
+                QueueMetrics.ActiveProcessing.Dec();
+        }
     }
+
 }
